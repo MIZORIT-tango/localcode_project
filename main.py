@@ -1,123 +1,38 @@
-import tkinter as tk
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import threading
+# PyQt6 MVP UI with structured layout and placeholders
+# Layers kept: model / pid / controller / view
+
+import sys
 import time
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QSlider, QFrame
+)
+from PyQt6.QtCore import Qt, QTimer
 
 
-class LevelSimulatorPID:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("PID Level Simulator")
-        self.root.geometry("1200x700")
-        self.root.configure(bg="#0f111a")
-
-        # ================= MODEL =================
+# ================= MODEL =================
+class TankModel:
+    def __init__(self):
         self.level = 50.0
         self.inflow = 0.0
         self.outflow = 0.0
         self.setpoint = 50.0
 
-        # PID
-        self.kp = 1.6
-        self.ki = 0.5
-        self.kd = 0.3
+    def update(self, dt):
+        self.level += (self.inflow - self.outflow) * dt * 3.0
+        self.level = max(0.0, min(100.0, self.level))
 
+
+# ================= PID =================
+class PIDController:
+    def __init__(self, kp=1.6, ki=0.5, kd=0.3):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
         self.integral = 0.0
         self.prev_error = 0.0
 
-        self.pid_enabled = False
-        self.running = True
-
-        # history (строго float)
-        self.history = [50.0 for _ in range(100)]
-        self.xdata = [i for i in range(100)]
-
-        self.build_ui()
-
-        threading.Thread(target=self.simulation_loop, daemon=True).start()
-
-    # ================= UI =================
-    def build_ui(self):
-        left = tk.Frame(self.root, bg="#0f111a")
-        left.pack(side=tk.LEFT, padx=15, pady=15)
-
-        # ===== LEVEL GAUGE =====
-        self.canvas = tk.Canvas(left, width=140, height=320, bg="#1b1f2a", highlightthickness=0)
-        self.canvas.pack()
-
-        self.level_bar = self.canvas.create_rectangle(
-            40, 300, 100, 300,
-            fill="cyan"
-        )
-
-        self.level_label = tk.Label(
-            left,
-            text="50.0%",
-            font=("Arial", 16),
-            fg="white",
-            bg="#0f111a"
-        )
-        self.level_label.pack(pady=10)
-
-        # ===== SLIDER =====
-        self.slider = tk.Scale(
-            left,
-            from_=0,
-            to=100,
-            orient=tk.HORIZONTAL,
-            length=380,
-            label="Inflow",
-            command=self.update_inflow
-        )
-        self.slider.pack(pady=15)
-
-        # PID toggle
-        self.btn = tk.Button(
-            left,
-            text="PID OFF",
-            command=self.toggle_pid,
-            width=18,
-            height=2
-        )
-        self.btn.pack(pady=10)
-
-        # ================= GRAPH =================
-        right = tk.Frame(self.root, bg="#0f111a")
-        right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-
-        self.fig, self.ax = plt.subplots()
-        self.fig.patch.set_facecolor("#0f111a")
-        self.ax.set_facecolor("#121826")
-
-        self.ax.set_ylim(0, 100)
-        self.ax.set_xlim(0, 100)
-
-        self.ax.grid(True, alpha=0.3)
-        self.ax.tick_params(colors="white")
-
-        # LEVEL LINE
-        self.level_line, = self.ax.plot(
-            self.xdata,
-            self.history,
-            color="orange",
-            linewidth=2
-        )
-
-        # SETPOINT LINE
-        self.sp_line, = self.ax.plot(
-            [0, 100],
-            [self.setpoint, self.setpoint],
-            "--",
-            color="lime",
-            linewidth=2
-        )
-
-        self.canvas_plot = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas_plot.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-    # ================= PID =================
-    def pid(self, error, dt):
+    def compute(self, error, dt):
         self.integral += error * dt
         self.integral = max(-100.0, min(100.0, self.integral))
 
@@ -125,88 +40,323 @@ class LevelSimulatorPID:
         self.prev_error = error
 
         return (
-            self.kp * error +
-            self.ki * self.integral +
-            self.kd * derivative
+                self.kp * error +
+                self.ki * self.integral +
+                self.kd * derivative
         )
 
-    # ================= SIMULATION =================
-    def simulation_loop(self):
-        last_time = time.time()
 
-        while True:
-            if not self.running:
-                time.sleep(0.05)
-                continue
+# ================= CONTROLLER =================
+class SimulationController:
+    def __init__(self):
+        self.model = TankModel()
+        self.pid = PIDController()
+        self.pid_enabled = False
+        self.last_time = time.time()
 
-            now = time.time()
-            dt = now - last_time
-            dt = float(min(dt, 0.05))
+    def step(self):
+        now = time.time()
+        dt = min(now - self.last_time, 0.05)
 
-            error = self.setpoint - self.level
+        error = self.model.setpoint - self.model.level
 
-            if self.pid_enabled:
-                control = self.pid(error, dt)
-                self.outflow = max(0.0, min(10.0, self.inflow + control))
-            else:
-                self.outflow = self.inflow * 0.5
+        if self.pid_enabled:
+            control = self.pid.compute(error, dt)
+            self.model.outflow = max(0.0, min(10.0, self.model.inflow + control))
+        else:
+            self.model.outflow = self.model.inflow * 0.5
 
-            # system dynamics
-            self.level += (self.inflow - self.outflow) * dt * 3.0
-            self.level = float(max(0.0, min(100.0, self.level)))
+        self.model.update(dt)
+        self.last_time = now
 
-            # history update
-            self.history.append(float(self.level))
-            if len(self.history) > 100:
-                self.history.pop(0)
 
-            self.root.after(0, self.update_ui)
+# ================= VIEW =================
+class MainWindow(QWidget):
+    def __init__(self):
+        super().__init__()
 
-            last_time = now
-            time.sleep(0.03)
+        self.setWindowTitle("АСУ: Симулятор уровня жидкости")
+        self.setGeometry(100, 100, 1000, 700)
 
-    # ================= UI UPDATE =================
-    def update_ui(self):
-        self.level_label.config(text=f"{self.level:.1f}%")
+        self.controller = SimulationController()
 
-        # gauge
-        h = int(300 * (self.level / 100.0))
-        self.canvas.coords(self.level_bar, 40, 300 - h, 100, 300)
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #1a1a2e;
+                color: #e0e0e0;
+            }
+            QLabel {
+                color: #ffffff;
+            }
+            QPushButton {
+                background-color: #16213e;
+                color: #ffffff;
+                border: 1px solid #0f3460;
+                padding: 8px;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #0f3460;
+            }
+            QSlider::groove:horizontal {
+                border: 1px solid #0f3460;
+                height: 8px;
+                background: #16213e;
+                margin: 2px 0;
+                border-radius: 4px;
+            }
+            QSlider::handle:horizontal {
+                background: #e94560;
+                border: 1px solid #e94560;
+                width: 18px;
+                margin: -2px 0;
+                border-radius: 9px;
+            }
+        """)
 
-        color = "red" if self.level > 80 else "cyan"
-        self.canvas.itemconfig(self.level_bar, fill=color)
+        self.init_ui()
 
-        # ограничение на отрисовку кадров
-        now_graph = time.time()
-        if not hasattr(self, '_last_graph_draw'):
-            self._last_graph_draw = 0
-        if now_graph - self._last_graph_draw < 0.1:
-            return
-        self._last_graph_draw = now_graph
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_simulation)
+        self.timer.start(30)
 
-        # ================= GRAPH FIX =================
-        x = [int(i) for i in range(len(self.history))]
-        y = [float(v) for v in self.history]
+    # -------- UI LAYOUT --------
+    def init_ui(self):
+        main_layout = QVBoxLayout()
 
-        self.level_line.set_xdata(x)
-        self.level_line.set_ydata(y)
+        # ===== HEADER =====
+        header = QLabel("Система управления уровнем жидкости")
+        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.setStyleSheet("font-size: 24px; font-weight: bold; color: #e0e0e0; padding: 10px;")
+        main_layout.addWidget(header)
 
-        sp = float(self.setpoint)
-        self.sp_line.set_ydata([sp, sp])
-        self.sp_line.set_xdata([0, 100])
+        # ===== MAIN AREA =====
+        main_area = QHBoxLayout()
 
-        self.canvas_plot.draw_idle()
+        # ---- LEFT: TANK ----
+        self.tank_frame = QFrame()
+        self.tank_frame.setStyleSheet("""
+            QFrame {
+                background-color: #16213e; 
+                border: 2px solid #0f3460; 
+                border-radius: 8px;
+            }
+        """)
+        self.tank_frame.setMinimumSize(300, 400)
 
-    # ================= CALLBACKS =================
-    def update_inflow(self, value):
-        self.inflow = float(value) / 10.0
+        tank_layout = QVBoxLayout()
+        self.level_label = QLabel("Уровень: 50.0%")
+        self.level_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #00ff88; padding: 20px;")
+        tank_layout.addWidget(self.level_label)
+
+        tank_description = QLabel("Индикатор уровня жидкости")
+        tank_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tank_description.setStyleSheet("font-size: 14px; color: #a0a0b0; padding: 5px;")
+        tank_layout.addWidget(tank_description)
+
+        tank_layout.addStretch()
+        self.tank_frame.setLayout(tank_layout)
+
+        # ---- RIGHT: GRAPH ----
+        self.graph_frame = QFrame()
+        self.graph_frame.setStyleSheet("""
+            QFrame {
+                background-color: #16213e; 
+                border: 2px solid #0f3460; 
+                border-radius: 8px;
+            }
+        """)
+        self.graph_frame.setMinimumSize(500, 400)
+
+        graph_layout = QVBoxLayout()
+        graph_label = QLabel("График уровня жидкости")
+        graph_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        graph_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #4ecdc4; padding: 15px;")
+        graph_layout.addWidget(graph_label)
+
+        graph_placeholder = QLabel("Здесь будет отображаться график\nизменения уровня во времени")
+        graph_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        graph_placeholder.setStyleSheet("font-size: 16px; color: #a0a0b0; padding: 10px;")
+        graph_layout.addWidget(graph_placeholder)
+
+        graph_layout.addStretch()
+        self.graph_frame.setLayout(graph_layout)
+
+        main_area.addWidget(self.tank_frame)
+        main_area.addWidget(self.graph_frame)
+
+        main_layout.addLayout(main_area)
+
+        # ===== BOTTOM AREA =====
+        bottom = QHBoxLayout()
+
+        # ---- CONTROLS ----
+        controls_frame = QFrame()
+        controls_frame.setStyleSheet("""
+            QFrame {
+                background-color: #16213e; 
+                border: 2px solid #0f3460; 
+                border-radius: 8px;
+                padding: 15px;
+            }
+        """)
+        controls_layout = QVBoxLayout()
+
+        # inflow label (dynamic)
+        self.inflow_label = QLabel("Подача: 0%")
+        self.inflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff6b6b; padding: 5px;")
+        controls_layout.addWidget(self.inflow_label)
+
+        slider_label = QLabel("Регулятор подачи:")
+        slider_label.setStyleSheet("font-size: 14px; color: #a0a0b0;")
+        controls_layout.addWidget(slider_label)
+
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setMinimum(0)
+        self.slider.setMaximum(100)
+        self.slider.valueChanged.connect(self.on_slider_change)
+        controls_layout.addWidget(self.slider)
+
+        self.pid_button = QPushButton("PID OFF")
+        self.pid_button.setStyleSheet("""
+            QPushButton {
+                background-color: #0f3460;
+                color: #ffffff;
+                border: 1px solid #e94560;
+                padding: 10px;
+                border-radius: 6px;
+                font-size: 16px;
+                font-weight: bold;
+                margin-top: 10px;
+            }
+            QPushButton:hover {
+                background-color: #e94560;
+            }
+        """)
+        self.pid_button.clicked.connect(self.toggle_pid)
+        controls_layout.addWidget(self.pid_button)
+
+        controls_frame.setLayout(controls_layout)
+
+        # ---- METRICS ----
+        metrics_frame = QFrame()
+        metrics_frame.setStyleSheet("""
+            QFrame {
+                background-color: #16213e; 
+                border: 2px solid #0f3460; 
+                border-radius: 8px;
+                padding: 15px;
+            }
+        """)
+        metrics_layout = QVBoxLayout()
+
+        metrics_title = QLabel("Метрики системы:")
+        metrics_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #4ecdc4;")
+        metrics_layout.addWidget(metrics_title)
+
+        metrics_layout.addWidget(self.create_metric_label("Время стабилизации:", "-"))
+        metrics_layout.addWidget(self.create_metric_label("Перерегулирование:", "-"))
+        metrics_layout.addWidget(self.create_metric_label("Оценка:", "-"))
+
+        metrics_frame.setLayout(metrics_layout)
+
+        bottom.addWidget(controls_frame, 2)  # controls занимает 2/3
+        bottom.addWidget(metrics_frame, 1)  # metrics занимает 1/3
+
+        main_layout.addLayout(bottom)
+
+        self.setLayout(main_layout)
+
+    @staticmethod
+    def create_metric_label(title, value):
+        """Создаёт стилизованную метку для метрик"""
+        label = QLabel(f"{title} {value}")
+        label.setStyleSheet("font-size: 14px; color: #e0e0e0; padding: 5px;")
+        return label
+
+    # -------- INTERACTION --------
+    def on_slider_change(self, value):
+        self.controller.model.inflow = value / 10.0
+        self.inflow_label.setText(f"Подача: {value}%")
+        if value > 70:
+            self.inflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff4444; padding: 5px;")
+        elif value > 30:
+            self.inflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffaa00; padding: 5px;")
+        else:
+            self.inflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00cc66; padding: 5px;")
 
     def toggle_pid(self):
-        self.pid_enabled = not self.pid_enabled
-        self.btn.config(text="PID ON" if self.pid_enabled else "PID OFF")
+        self.controller.pid_enabled = not self.controller.pid_enabled
+        if self.controller.pid_enabled:
+            self.pid_button.setText("PID ON")
+            self.pid_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #00cc66;
+                    color: #ffffff;
+                    border: 1px solid #00cc66;
+                    padding: 10px;
+                    border-radius: 6px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    margin-top: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #00ff88;
+                }
+            """)
+        else:
+            self.pid_button.setText("PID OFF")
+            self.pid_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #0f3460;
+                    color: #ffffff;
+                    border: 1px solid #e94560;
+                    padding: 10px;
+                    border-radius: 6px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    margin-top: 10px;
+                }
+                QPushButton:hover {
+                    background-color: #e94560;
+                }
+            """)
+
+    # -------- UPDATE LOOP --------
+    def update_simulation(self):
+        self.controller.step()
+        level = self.controller.model.level
+        self.level_label.setText(f"Уровень: {level:.1f}%")
+
+        if level > 90 or level < 10:
+            self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #ff4444; padding: 20px;")
+        elif level > 70 or level < 30:
+            self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #ffaa00; padding: 20px;")
+        else:
+            self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #00ff88; padding: 20px;")
+
+
+# ================= MAIN =================
+def main():
+    app = QApplication(sys.argv)
+
+    app.setStyle('Fusion')
+    app.setStyleSheet("""
+        QToolTip {
+            background-color: #16213e;
+            color: #ffffff;
+            border: 1px solid #0f3460;
+            padding: 5px;
+            font-size: 12px;
+        }
+    """)
+
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = LevelSimulatorPID(root)
-    root.mainloop()
+    main()

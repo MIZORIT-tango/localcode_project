@@ -5,7 +5,7 @@ import sys
 import time
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QSlider, QFrame
+    QLabel, QPushButton, QSlider, QFrame, QMessageBox
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -53,18 +53,23 @@ class SimulationController:
         self.pid = PIDController()
         self.pid_enabled = False
         self.last_time = time.time()
+        self.mode = "manual" # manual / auto / tuning
 
     def step(self):
         now = time.time()
         dt = min(now - self.last_time, 0.05)
 
-        error = self.model.setpoint - self.model.level
+        error = self.model.level - self.model.setpoint
 
-        if self.pid_enabled:
-            control = self.pid.compute(error, dt)
-            self.model.outflow = max(0.0, min(10.0, self.model.inflow + control))
-        else:
+        if self.mode == "manual":
             self.model.outflow = self.model.inflow * 0.5
+
+        else:
+            error = self.model.level - self.model.setpoint
+            control = self.pid.compute(error, dt)
+
+            self.model.outflow += control * dt
+            self.model.outflow = max(0.0, min(10.0, self.model.outflow))
 
         self.model.update(dt)
         self.last_time = now
@@ -76,7 +81,7 @@ class MainWindow(QWidget):
         super().__init__()
 
         self.setWindowTitle("АСУ: Симулятор уровня жидкости")
-        self.setGeometry(100, 100, 1000, 700)
+        self.setGeometry(100, 100, 1200, 750)
 
         self.controller = SimulationController()
 
@@ -125,11 +130,30 @@ class MainWindow(QWidget):
     def init_ui(self):
         main_layout = QVBoxLayout()
 
-        # ===== HEADER =====
+        # ===== HEADER=====
+        header_layout = QHBoxLayout()
+
+        self.help_button = QPushButton("ℹ  О программе")
+        self.help_button.setFixedWidth(150)
+        self.help_button.clicked.connect(self.show_help)
+
         header = QLabel("Система управления уровнем жидкости")
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setStyleSheet("font-size: 24px; font-weight: bold; color: #e0e0e0; padding: 10px;")
-        main_layout.addWidget(header)
+        header.setStyleSheet("font-size: 24px; font-weight: bold;")
+
+        header_layout.addWidget(self.help_button)
+
+        header_layout.addStretch()
+
+        header_layout.addWidget(header)
+
+        header_layout.addStretch()
+
+        spacer = QLabel()
+        spacer.setFixedWidth(40)
+        header_layout.addWidget(spacer)
+
+        main_layout.addLayout(header_layout)
 
         # ===== MAIN AREA =====
         main_area = QHBoxLayout()
@@ -204,8 +228,26 @@ class MainWindow(QWidget):
         """)
         controls_layout = QVBoxLayout()
 
-        # inflow label (dynamic)
+        mode_buttons = QHBoxLayout()
+
+        mode_label = QLabel("Режим работы:")
+        self.manual_btn = QPushButton("Ручной")
+        self.auto_btn = QPushButton("Авто")
+        self.tuning_btn = QPushButton("PID")
+
+        self.manual_btn.clicked.connect(lambda: self.set_mode("manual"))
+        self.auto_btn.clicked.connect(lambda: self.set_mode("auto"))
+        self.tuning_btn.clicked.connect(lambda: self.set_mode("tuning"))
+
+        mode_buttons.addWidget(mode_label)
+        mode_buttons.addWidget(self.manual_btn)
+        mode_buttons.addWidget(self.auto_btn)
+        mode_buttons.addWidget(self.tuning_btn)
+
+        controls_layout.addLayout(mode_buttons)
+
         self.inflow_label = QLabel("Подача: 0%")
+        self.inflow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.inflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff6b6b; padding: 5px;")
         controls_layout.addWidget(self.inflow_label)
 
@@ -269,6 +311,68 @@ class MainWindow(QWidget):
 
         self.setLayout(main_layout)
 
+    def set_mode(self, mode):
+        self.controller.mode = mode
+
+        if mode == "manual":
+            self.controller.pid_enabled = False
+            MainWindow.pid_off_style(self.pid_button)
+        else:
+            self.controller.pid_enabled = True
+            MainWindow.pid_on_style(self.pid_button)
+
+        self.manual_btn.setStyleSheet("")
+        self.auto_btn.setStyleSheet("")
+        self.tuning_btn.setStyleSheet("")
+
+        if mode == "manual":
+            self.manual_btn.setStyleSheet("background-color: #00cc66;")
+        elif mode == "auto":
+            self.auto_btn.setStyleSheet("background-color: #00cc66;")
+        else:
+            self.tuning_btn.setStyleSheet("background-color: #00cc66;")
+
+    def show_help(self):
+        msg = QMessageBox(self)
+        msg.setWindowTitle("О программе")
+
+        from PyQt6.QtGui import QIcon
+        msg.setWindowIcon(QIcon.fromTheme("dialog-information"))
+
+        msg.setStyleSheet("""
+                QMessageBox {
+                    background-color: #1a1a2e;
+                    color: #ffffff;
+                    font-size: 16px;
+                }
+                QMessageBox QLabel {
+                    color: #ffffff;
+                    font-size: 14px;
+                }
+                QMessageBox QPushButton {
+                    background-color: #16213e;
+                    color: #ffffff;
+                    border: 1px solid #0f3460;
+                    padding: 8px 16px;
+                    border-radius: 4px;
+                    font-size: 14px;
+                    min-width: 80px;
+                }
+                QMessageBox QPushButton:hover {
+                    background-color: #0f3460;
+                }
+            """)
+        msg.setText(
+            "Этот симулятор демонстрирует, как работают системы автоматического управления.\n\n"
+            "Вы управляете уровнем жидкости в резервуаре:\n"
+            "- В ручном режиме вы сами регулируете подачу\n"
+            "- В автоматическом режиме система делает это за вас\n"
+            "- В режиме настройки вы можете изменить поведение системы\n\n"
+            "Такие системы используются в промышленности, робототехнике и даже в автопилотах."
+        )
+
+        msg.exec()
+
     @staticmethod
     def create_metric_label(title, value):
         """Создаёт стилизованную метку для метрик"""
@@ -290,8 +394,34 @@ class MainWindow(QWidget):
     def toggle_pid(self):
         self.controller.pid_enabled = not self.controller.pid_enabled
         if self.controller.pid_enabled:
-            self.pid_button.setText("PID ON")
-            self.pid_button.setStyleSheet("""
+            MainWindow.pid_on_style(self.pid_button)
+        else:
+            MainWindow.pid_off_style(self.pid_button)
+
+    @staticmethod
+    def pid_off_style(btn):
+        btn.setText("PID OFF")
+        btn.setStyleSheet("""
+                        QPushButton {
+                            background-color: #0f3460;
+                            color: #ffffff;
+                            border: 1px solid #e94560;
+                            padding: 10px;
+                            border-radius: 6px;
+                            font-size: 16px;
+                            font-weight: bold;
+                            margin-top: 10px;
+                        }
+                        QPushButton:hover {
+                            background-color: #e94560;
+                        }
+                    """)
+        return btn
+
+    @staticmethod
+    def pid_on_style(btn):
+        btn.setText("PID ON")
+        btn.setStyleSheet("""
                 QPushButton {
                     background-color: #00cc66;
                     color: #ffffff;
@@ -306,23 +436,7 @@ class MainWindow(QWidget):
                     background-color: #00ff88;
                 }
             """)
-        else:
-            self.pid_button.setText("PID OFF")
-            self.pid_button.setStyleSheet("""
-                QPushButton {
-                    background-color: #0f3460;
-                    color: #ffffff;
-                    border: 1px solid #e94560;
-                    padding: 10px;
-                    border-radius: 6px;
-                    font-size: 16px;
-                    font-weight: bold;
-                    margin-top: 10px;
-                }
-                QPushButton:hover {
-                    background-color: #e94560;
-                }
-            """)
+        return btn
 
     # -------- UPDATE LOOP --------
     def update_simulation(self):

@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QSlider, QFrame, QMessageBox
+    QLabel, QPushButton, QSlider, QFrame, QMessageBox, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPainter, QColor, QBrush, QPen, QFont
@@ -144,8 +144,8 @@ class MainWindow(QWidget):
         bottom = QHBoxLayout()
 
         # ---- CONTROLS ----
-        controls_frame = QFrame()
-        controls_frame.setStyleSheet("""
+        self.controls_frame = QFrame()
+        self.controls_frame.setStyleSheet("""
             QFrame {
                 background-color: #16213e; 
                 border: 2px solid #0f3460; 
@@ -153,7 +153,68 @@ class MainWindow(QWidget):
                 padding: 15px;
             }
         """)
+        self.controls_frame.setMaximumHeight(500)
         controls_layout = QVBoxLayout()
+
+        self.pid_frame = QFrame()
+        self.pid_frame.setMaximumHeight(120)
+        self.pid_frame.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        pid_layout = QVBoxLayout()
+        pid_layout.setContentsMargins(8, 0, 8, 0)  # Уменьшаем отступы
+        pid_layout.setSpacing(2)
+
+        pid_controls = QHBoxLayout()
+
+        kp_block = QVBoxLayout()
+        self.kp_label = QLabel(f"Kp: {self.controller.pid.kp:.2f}")
+        self.kp_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.kp_slider = QSlider(Qt.Orientation.Horizontal)
+        self.kp_slider.setMinimum(0)
+        self.kp_slider.setMaximum(1000)
+        self.kp_slider.setValue(int(self.controller.pid.kp * 100))
+        self.kp_slider.valueChanged.connect(self.update_kp)
+        kp_block.addWidget(self.kp_label)
+        kp_block.addWidget(self.kp_slider)
+        self.kp_label.setStyleSheet("color: #ff6b6b;")
+        pid_controls.addLayout(kp_block)
+
+        ki_block = QVBoxLayout()
+        self.ki_label = QLabel(f"Ki: {self.controller.pid.ki:.2f}")
+        self.ki_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.ki_slider = QSlider(Qt.Orientation.Horizontal)
+        self.ki_slider.setMinimum(0)
+        self.ki_slider.setMaximum(500)
+        self.ki_slider.setValue(int(self.controller.pid.ki * 100))
+        self.ki_slider.valueChanged.connect(self.update_ki)
+        ki_block.addWidget(self.ki_label)
+        ki_block.addWidget(self.ki_slider)
+        self.ki_label.setStyleSheet("color: #6bff6b;")
+        pid_controls.addLayout(ki_block)
+
+        kd_block = QVBoxLayout()
+        self.kd_label = QLabel(f"Kd: {self.controller.pid.kd:.2f}")
+        self.kd_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.kd_slider = QSlider(Qt.Orientation.Horizontal)
+        self.kd_slider.setMinimum(0)
+        self.kd_slider.setMaximum(500)
+        self.kd_slider.setValue(int(self.controller.pid.kd * 100))
+        self.kd_slider.valueChanged.connect(self.update_kd)
+        kd_block.addWidget(self.kd_label)
+        kd_block.addWidget(self.kd_slider)
+        self.kd_label.setStyleSheet("color: #6b9fff;")
+        pid_controls.addLayout(kd_block)
+
+        pid_layout.addLayout(pid_controls)
+
+        self.pid_frame.setLayout(pid_layout)
+        self.pid_frame.hide()
+        self.pid_frame.setStyleSheet("""
+            background-color: #161a24;
+            border-radius: 6px;
+        """)
+        controls_layout.addWidget(self.pid_frame)
 
         mode_buttons = QHBoxLayout()
 
@@ -197,7 +258,8 @@ class MainWindow(QWidget):
         self.slider.valueChanged.connect(self.on_slider_change)
         controls_layout.addWidget(self.slider)
 
-        controls_frame.setLayout(controls_layout)
+        controls_layout.addStretch()
+        self.controls_frame.setLayout(controls_layout)
 
         # ---- METRICS ----
         metrics_frame = QFrame()
@@ -221,7 +283,7 @@ class MainWindow(QWidget):
 
         metrics_frame.setLayout(metrics_layout)
 
-        bottom.addWidget(controls_frame, 2)  # controls занимает 2/3
+        bottom.addWidget(self.controls_frame, 2)  # controls занимает 2/3
         bottom.addWidget(metrics_frame, 1)  # metrics занимает 1/3
 
         main_layout.addLayout(bottom)
@@ -240,12 +302,34 @@ class MainWindow(QWidget):
         self.auto_btn.setStyleSheet("")
         self.tuning_btn.setStyleSheet("")
 
+        self.controls_frame.setStyleSheet("""
+                                    QFrame {
+                                        background-color: #16213e; 
+                                        border: 2px solid #0f3460; 
+                                        border-radius: 8px;
+                                        padding: 15px;
+                                    }
+                                """)
+
         if mode == "manual":
             self.manual_btn.setStyleSheet("background-color: #00cc66;")
+            self.pid_frame.hide()
         elif mode == "auto":
             self.auto_btn.setStyleSheet("background-color: #00cc66;")
-        else:
+            self.pid_frame.hide()
+        elif mode == "tuning":
             self.tuning_btn.setStyleSheet("background-color: #00cc66;")
+            self.controls_frame.setStyleSheet("""
+                            QFrame {
+                                background-color: #16213e; 
+                                border: 2px solid #0f3460; 
+                                border-radius: 8px;
+                                padding: 5px;
+                                padding-left: 6px;
+                                padding-right: 6px;
+                            }
+                        """)
+            self.pid_frame.show()
 
     def show_help(self):
         msg = QMessageBox(self)
@@ -333,6 +417,21 @@ class MainWindow(QWidget):
             self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffaa00; padding: 5px;")
         else:
             self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00cc66; padding: 5px;")
+
+    def update_kp(self, value):
+        kp = value / 100
+        self.controller.pid.kp = kp
+        self.kp_label.setText(f"Kp: {kp:.2f}")
+
+    def update_ki(self, value):
+        ki = value / 100
+        self.controller.pid.ki = ki
+        self.ki_label.setText(f"Ki: {ki:.2f}")
+
+    def update_kd(self, value):
+        kd = value / 100
+        self.controller.pid.kd = kd
+        self.kd_label.setText(f"Kd: {kd:.2f}")
 
 
 class TankWidget(QWidget):

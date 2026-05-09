@@ -3,6 +3,9 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QSlider, QFrame, QMessageBox
 )
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QPainter, QColor, QBrush, QPen, QFont
+import pyqtgraph as pg
+import time
 
 from src.controller import SimulationController
 
@@ -90,29 +93,8 @@ class MainWindow(QWidget):
         main_area = QHBoxLayout()
 
         # ---- LEFT: TANK ----
-        self.tank_frame = QFrame()
-        self.tank_frame.setStyleSheet("""
-            QFrame {
-                background-color: #16213e; 
-                border: 2px solid #0f3460; 
-                border-radius: 8px;
-            }
-        """)
-        self.tank_frame.setMinimumSize(300, 400)
-
-        tank_layout = QVBoxLayout()
-        self.level_label = QLabel("Уровень: 50.0%")
-        self.level_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #00ff88; padding: 20px;")
-        tank_layout.addWidget(self.level_label)
-
-        tank_description = QLabel("Индикатор уровня жидкости")
-        tank_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        tank_description.setStyleSheet("font-size: 14px; color: #a0a0b0; padding: 5px;")
-        tank_layout.addWidget(tank_description)
-
-        tank_layout.addStretch()
-        self.tank_frame.setLayout(tank_layout)
+        self.tank_widget = TankWidget(self.controller)
+        main_area.addWidget(self.tank_widget)
 
         # ---- RIGHT: GRAPH ----
         self.graph_frame = QFrame()
@@ -126,20 +108,34 @@ class MainWindow(QWidget):
         self.graph_frame.setMinimumSize(500, 400)
 
         graph_layout = QVBoxLayout()
-        graph_label = QLabel("График уровня жидкости")
-        graph_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        graph_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #4ecdc4; padding: 15px;")
-        graph_layout.addWidget(graph_label)
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.setBackground('#121826')
+        self.plot_widget.getPlotItem().layout.setContentsMargins(10, 10, 20, 30)
 
-        graph_placeholder = QLabel("Здесь будет отображаться график\nизменения уровня во времени")
-        graph_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        graph_placeholder.setStyleSheet("font-size: 16px; color: #a0a0b0; padding: 10px;")
-        graph_layout.addWidget(graph_placeholder)
+        self.plot_widget.setTitle("Уровень жидкости")
+        self.plot_widget.setLabel('left', 'Уровень (%)')
+        self.plot_widget.setLabel('bottom', 'Время (с)')
+        self.plot_widget.showGrid(x=True, y=True)
+        self.plot_widget.setYRange(0, 100)
+        self.plot_widget.setXRange(0, 30)
 
-        graph_layout.addStretch()
+        self.plot_widget.disableAutoRange()
+
+        self.level_curve = self.plot_widget.plot(
+            pen=pg.mkPen('#4ecdc4', width=3)
+        )
+
+        self.setpoint_line = pg.InfiniteLine(
+            pos=50,
+            angle=0,
+            pen=pg.mkPen('#00ff88', width=2, style=Qt.PenStyle.DashLine)
+        )
+
+        self.plot_widget.addItem(self.setpoint_line)
+
+        graph_layout.addWidget(self.plot_widget)
         self.graph_frame.setLayout(graph_layout)
 
-        main_area.addWidget(self.tank_frame)
         main_area.addWidget(self.graph_frame)
 
         main_layout.addLayout(main_area)
@@ -314,21 +310,114 @@ class MainWindow(QWidget):
     def update_simulation(self):
         self.controller.step()
         level = self.controller.model.level
-        self.level_label.setText(f"Уровень: {level:.1f}%")
+        self.tank_widget.update()
 
         outflow_percent = self.controller.model.outflow * 10
         self.outflow_label.setText(f"Отдача: {outflow_percent:.1f}%")
 
-        if level > 90 or level < 10:
-            self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #ff4444; padding: 20px;")
-        elif level > 70 or level < 30:
-            self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #ffaa00; padding: 20px;")
-        else:
-            self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #00ff88; padding: 20px;")
+        current_time = time.time() - self.controller.start_time
+        self.controller.time_data.append(current_time)
+        self.controller.level_data.append(level)
 
+        window = 30
+        if current_time > window:
+            self.plot_widget.setXRange(current_time - window, current_time)
+
+        self.level_curve.setData(
+            list(self.controller.time_data),
+            list(self.controller.level_data)
+        )
         if outflow_percent > 75:
             self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff4444; padding: 5px;")
         elif outflow_percent > 50:
             self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffaa00; padding: 5px;")
         else:
             self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00cc66; padding: 5px;")
+
+
+class TankWidget(QWidget):
+    def __init__(self, controller):
+        super().__init__()
+
+        self.controller = controller
+        self.setMinimumSize(300, 500)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        width = self.width()
+        height = self.height()
+
+        # размеры бака
+        tank_width = 140
+        tank_height = 320
+
+        x = (width - tank_width) // 2
+        y = 60
+
+        level  = self.controller.model.level
+        level_percent = self.controller.model.level / 100.0
+
+        # ВНЕШНИЙ ЦИЛИНДР
+        painter.setPen(QPen(QColor(220, 220, 220), 3))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        # стенки
+        painter.drawRect(x, y, tank_width, tank_height)
+
+        # верхний эллипс
+        painter.drawEllipse(x, y - 15, tank_width, 30)
+
+        # нижний эллипс
+        painter.drawEllipse(x, y + tank_height - 15, tank_width, 30)
+
+        # ЖИДКОСТЬ
+        fluid_height = int(tank_height * level_percent)
+        fluid_y = y + tank_height - fluid_height
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(0, 140, 255, 180)))
+
+        # жидкость внутри
+        painter.drawRect(
+            x + 2,
+            fluid_y,
+            tank_width - 4,
+            fluid_height
+        )
+
+        # верх жидкости
+        painter.drawEllipse(
+            x + 2,
+            fluid_y - 12,
+            tank_width - 4,
+            24
+        )
+
+        # низ жидкости
+        painter.drawEllipse(x, y + tank_height - 15, tank_width, 30)
+
+        # ТЕКСТ
+        if level < 20 or level > 80:
+            text_color = QColor(255, 80, 80)
+        elif level < 35 or level > 65:
+            text_color = QColor(255, 220, 120)
+        else:
+            text_color = QColor(100, 255, 180)
+
+        font = QFont()
+        font.setPointSize(16)
+        font.setBold(True)
+
+        painter.setFont(font)
+
+        painter.setPen(text_color)
+        painter.drawText(
+            x - 10,
+            y + tank_height + 50,
+            tank_width + 20,
+            40,
+            Qt.AlignmentFlag.AlignCenter,
+            f"Уровень: {level:.1f}%"
+        )

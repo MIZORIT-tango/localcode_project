@@ -399,9 +399,10 @@ class TankWidget(QWidget):
         painter.drawEllipse(x, y + tank_height - 15, tank_width, 30)
 
         # ТЕКСТ
-        if level < 20 or level > 80:
+        error = abs(level - 50)
+        if error > 30:
             text_color = QColor(255, 80, 80)
-        elif level < 35 or level > 65:
+        elif error > 15:
             text_color = QColor(255, 220, 120)
         else:
             text_color = QColor(100, 255, 180)

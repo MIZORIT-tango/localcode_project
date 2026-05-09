@@ -12,7 +12,7 @@ class SimulationController:
         self.pid = PIDController()
         self.pid_enabled = False
         self.last_time = time.time()
-        self.mode = "zero" # manual / auto / tuning
+        self.mode = "zero" # manual / auto / tuning / zero - исключительно начальный режим (выкл)
 
         self.time_data = deque(maxlen=1000)
         self.level_data = deque(maxlen=1000)

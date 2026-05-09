@@ -177,10 +177,19 @@ class MainWindow(QWidget):
 
         controls_layout.addLayout(mode_buttons)
 
+        in_out_labels = QHBoxLayout()
+
         self.inflow_label = QLabel("Подача: 0%")
         self.inflow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.inflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff6b6b; padding: 5px;")
-        controls_layout.addWidget(self.inflow_label)
+
+        self.outflow_label = QLabel("Отдача: 0%")
+        self.outflow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff6b6b; padding: 5px;")
+
+        in_out_labels.addWidget(self.inflow_label)
+        in_out_labels.addWidget(self.outflow_label)
+        controls_layout.addLayout(in_out_labels)
 
         slider_label = QLabel("Регулятор подачи:")
         slider_label.setStyleSheet("font-size: 14px; color: #a0a0b0;")
@@ -191,25 +200,6 @@ class MainWindow(QWidget):
         self.slider.setMaximum(100)
         self.slider.valueChanged.connect(self.on_slider_change)
         controls_layout.addWidget(self.slider)
-
-        self.pid_button = QPushButton("PID OFF")
-        self.pid_button.setStyleSheet("""
-            QPushButton {
-                background-color: #0f3460;
-                color: #ffffff;
-                border: 1px solid #e94560;
-                padding: 10px;
-                border-radius: 6px;
-                font-size: 16px;
-                font-weight: bold;
-                margin-top: 10px;
-            }
-            QPushButton:hover {
-                background-color: #e94560;
-            }
-        """)
-        self.pid_button.clicked.connect(self.toggle_pid)
-        controls_layout.addWidget(self.pid_button)
 
         controls_frame.setLayout(controls_layout)
 
@@ -247,10 +237,8 @@ class MainWindow(QWidget):
 
         if mode == "manual":
             self.controller.pid_enabled = False
-            MainWindow.pid_off_style(self.pid_button)
         else:
             self.controller.pid_enabled = True
-            MainWindow.pid_on_style(self.pid_button)
 
         self.manual_btn.setStyleSheet("")
         self.auto_btn.setStyleSheet("")
@@ -322,58 +310,14 @@ class MainWindow(QWidget):
         else:
             self.inflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00cc66; padding: 5px;")
 
-    def toggle_pid(self):
-        self.controller.pid_enabled = not self.controller.pid_enabled
-        if self.controller.pid_enabled:
-            MainWindow.pid_on_style(self.pid_button)
-        else:
-            MainWindow.pid_off_style(self.pid_button)
-
-    @staticmethod
-    def pid_off_style(btn):
-        btn.setText("PID OFF")
-        btn.setStyleSheet("""
-                        QPushButton {
-                            background-color: #0f3460;
-                            color: #ffffff;
-                            border: 1px solid #e94560;
-                            padding: 10px;
-                            border-radius: 6px;
-                            font-size: 16px;
-                            font-weight: bold;
-                            margin-top: 10px;
-                        }
-                        QPushButton:hover {
-                            background-color: #e94560;
-                        }
-                    """)
-        return btn
-
-    @staticmethod
-    def pid_on_style(btn):
-        btn.setText("PID ON")
-        btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #00cc66;
-                    color: #ffffff;
-                    border: 1px solid #00cc66;
-                    padding: 10px;
-                    border-radius: 6px;
-                    font-size: 16px;
-                    font-weight: bold;
-                    margin-top: 10px;
-                }
-                QPushButton:hover {
-                    background-color: #00ff88;
-                }
-            """)
-        return btn
-
     # -------- UPDATE LOOP --------
     def update_simulation(self):
         self.controller.step()
         level = self.controller.model.level
         self.level_label.setText(f"Уровень: {level:.1f}%")
+
+        outflow_percent = self.controller.model.outflow * 10
+        self.outflow_label.setText(f"Отдача: {outflow_percent:.1f}%")
 
         if level > 90 or level < 10:
             self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #ff4444; padding: 20px;")
@@ -381,3 +325,10 @@ class MainWindow(QWidget):
             self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #ffaa00; padding: 20px;")
         else:
             self.level_label.setStyleSheet("font-size: 22px; font-weight: bold; color: #00ff88; padding: 20px;")
+
+        if outflow_percent > 75:
+            self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff4444; padding: 5px;")
+        elif outflow_percent > 50:
+            self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ffaa00; padding: 5px;")
+        else:
+            self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00cc66; padding: 5px;")

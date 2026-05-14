@@ -19,6 +19,17 @@ class MainWindow(QWidget):
 
         self.controller = SimulationController()
 
+        self.max_level = self.controller.model.level
+
+        self.settled = False
+        self.settling_time = None
+        self.final_settling_time = None
+        self.unstable_since = 0
+
+        self.previous_error = None
+        self.has_crossed_target = False
+        self.max_overshoot = 0
+
         self.setStyleSheet("""
             QWidget {
                 background-color: #1a1a2e;
@@ -277,9 +288,23 @@ class MainWindow(QWidget):
         metrics_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #4ecdc4;")
         metrics_layout.addWidget(metrics_title)
 
-        metrics_layout.addWidget(self.create_metric_label("Время стабилизации:", "-"))
-        metrics_layout.addWidget(self.create_metric_label("Перерегулирование:", "-"))
-        metrics_layout.addWidget(self.create_metric_label("Оценка:", "-"))
+        self.settling_label = self.create_metric_label(
+            "Время стабилизации:", "-"
+        )
+        self.overshoot_label = self.create_metric_label(
+            "Перерегулирование:", "-"
+        )
+        self.error_label = self.create_metric_label(
+            "Ошибка:", "-"
+        )
+        self.quality_label = self.create_metric_label(
+            "Оценка:", "-"
+        )
+
+        metrics_layout.addWidget(self.settling_label)
+        metrics_layout.addWidget(self.overshoot_label)
+        metrics_layout.addWidget(self.error_label)
+        metrics_layout.addWidget(self.quality_label)
 
         metrics_frame.setLayout(metrics_layout)
 
@@ -395,6 +420,67 @@ class MainWindow(QWidget):
         self.controller.step()
         level = self.controller.model.level
         self.tank_widget.update()
+
+        target = self.controller.model.setpoint
+
+        signed_error = target - level
+        error = abs(signed_error)
+        self.error_label.setText(
+            f"Ошибка: {error:.1f}%"
+        )
+
+        if self.previous_error is not None:
+            if (self.previous_error > 0 > signed_error) or (self.previous_error < 0 < signed_error):
+                self.has_crossed_target = True
+
+        if self.has_crossed_target:
+            overshoot = abs(level - target)
+            if overshoot > self.max_overshoot:
+                self.max_overshoot = overshoot
+
+        self.overshoot_label.setText(
+            f"Перерегулирование: {self.max_overshoot:.1f}%"
+        )
+        self.previous_error = signed_error
+
+        current_time = time.time() - self.controller.start_time
+        if not self.settled:
+            if error < 5:
+                if self.settling_time is None:
+                    self.settling_time = current_time
+                elif current_time - self.settling_time > 3:
+                    self.settled = True
+                    self.final_settling_time = current_time - self.unstable_since
+            else:
+                self.settling_time = None
+        else:
+            if error > 5:
+                self.settling_time = None
+                self.settled = False
+                self.unstable_since = current_time
+                self.max_overshoot = 0
+                self.has_crossed_target = False
+
+        if self.settled:
+            self.settling_label.setText(
+                f"Время стабилизации: {self.final_settling_time:.1f} c"
+            )
+        else:
+            self.settling_label.setText(
+                "Время стабилизации: ..."
+            )
+
+        if self.max_overshoot < 5 and error < 3:
+            quality = "Отличное"
+        elif self.max_overshoot < 10 and error < 5:
+            quality = "Хорошее"
+        elif self.max_overshoot < 15 and error < 7:
+            quality = "Удовлетворительно"
+        else:
+            quality = "Нестабильное"
+        self.quality_label.setText(
+            f"Оценка: {quality}"
+        )
 
         outflow_percent = self.controller.model.outflow * 10
         self.outflow_label.setText(f"Отдача: {outflow_percent:.1f}%")

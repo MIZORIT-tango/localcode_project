@@ -1,3 +1,5 @@
+import random
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QSlider, QFrame, QMessageBox, QSizePolicy
@@ -18,6 +20,14 @@ class MainWindow(QWidget):
         self.setGeometry(100, 100, 1200, 750)
 
         self.controller = SimulationController()
+
+        self.failure_active = False
+        self.failure_start_time = None
+        self.failure_duration = 30
+
+        self.best_error = 999999
+        self.best_overshoot = 999999
+        self.best_settling = 999999
 
         self.max_level = self.controller.model.level
 
@@ -92,7 +102,13 @@ class MainWindow(QWidget):
 
         header_layout.addWidget(header)
 
+        self.failure_button = QPushButton("Старт аварии")
+        self.failure_button.setFixedWidth(170)
+        self.failure_button.clicked.connect(self.trigger_failure)
+
         header_layout.addStretch()
+
+        header_layout.addWidget(self.failure_button)
 
         spacer = QLabel()
         spacer.setFixedWidth(40)
@@ -444,6 +460,25 @@ class MainWindow(QWidget):
         self.previous_error = signed_error
 
         current_time = time.time() - self.controller.start_time
+        if self.failure_active:
+            elapsed = time.time() - self.failure_start_time
+            remaining = max(0, self.failure_duration - elapsed)
+            self.failure_button.setText(
+                f"Авария: {remaining:.0f} c"
+            )
+
+            self.best_overshoot = self.max_overshoot
+
+            if self.final_settling_time is not None:
+                if self.final_settling_time < self.best_settling:
+                    self.best_settling = self.final_settling_time
+
+            if remaining <= 0:
+                self.failure_active = False
+                self.failure_button.setText("Авария системы")
+
+                self.show_failure_results()
+
         if not self.settled:
             if error < 5:
                 if self.settling_time is None:
@@ -504,6 +539,46 @@ class MainWindow(QWidget):
         else:
             self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00cc66; padding: 5px;")
 
+    def show_failure_results(self):
+
+        msg = QMessageBox(self)
+
+        msg.setWindowTitle("Результаты восстановления")
+
+        score = 0
+
+        if self.best_overshoot < 10:
+            score += 1
+        elif self.best_overshoot < 15:
+            score += 0.8
+        elif self.best_overshoot < 20:
+            score += 0.6
+
+        if self.best_settling < 10:
+            score += 1
+        if self.best_settling < 20:
+            score += 0.5
+
+        if score == 2:
+            rating = "Отличное восстановление"
+        elif score > 1.7:
+            rating = "Хорошее восстановление"
+        elif score > 1.2:
+            rating = "Система удовлетворительна"
+        elif score > 1:
+            rating = "Система нестабильна"
+        else:
+            rating = "Критическая ошибка регулирования"
+
+        msg.setText(
+            f"Результаты аварийного режима:\n\n"
+            f"Макс. перерегулирование: {self.best_overshoot:.2f}%\n"
+            f"Время стабилизации: {self.best_settling:.2f} c\n\n"
+            f"Оценка: {rating}"
+        )
+
+        msg.exec()
+
     def update_kp(self, value):
         kp = value / 100
         self.controller.pid.kp = kp
@@ -518,6 +593,25 @@ class MainWindow(QWidget):
         kd = value / 100
         self.controller.pid.kd = kd
         self.kd_label.setText(f"Kd: {kd:.2f}")
+
+    def trigger_failure(self):
+        self.failure_active = True
+        self.failure_start_time = time.time()
+        self.controller.model.level = random.choice((0, 100))
+
+        self.max_overshoot = 0
+        self.previous_error = None
+        self.has_crossed_target = False
+
+        self.settled = False
+        self.settling_time = None
+        self.final_settling_time = None
+
+        self.unstable_since = 0
+
+        self.best_error = 999999
+        self.best_overshoot = 999999
+        self.best_settling = 999999
 
 
 class TankWidget(QWidget):

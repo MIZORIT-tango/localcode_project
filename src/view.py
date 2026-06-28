@@ -21,6 +21,13 @@ class MainWindow(QWidget):
 
         self.controller = SimulationController()
 
+        # Сохраняем начальные значения PID по умолчанию
+        self.default_pid = {
+            'kp': 1.6,
+            'ki': 0.5,
+            'kd': 0.3
+        }
+
         self.failure_active = False
         self.failure_start_time = None
         self.failure_duration = 30
@@ -28,6 +35,7 @@ class MainWindow(QWidget):
         self.best_error = 999999
         self.best_overshoot = 999999
         self.best_settling = 999999
+        self.best_score = 0
 
         self.max_level = self.controller.model.level
 
@@ -76,6 +84,9 @@ class MainWindow(QWidget):
         """)
 
         self.init_ui()
+
+        # Устанавливаем начальные значения PID после создания UI
+        self.set_pid_values(self.default_pid['kp'], self.default_pid['ki'], self.default_pid['kd'])
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_simulation)
@@ -202,7 +213,7 @@ class MainWindow(QWidget):
         self.kp_slider = QSlider(Qt.Orientation.Horizontal)
         self.kp_slider.setMinimum(0)
         self.kp_slider.setMaximum(1000)
-        self.kp_slider.setValue(int(self.controller.pid.kp * 100))
+        self.kp_slider.setValue(0)
         self.kp_slider.valueChanged.connect(self.update_kp)
         kp_block.addWidget(self.kp_label)
         kp_block.addWidget(self.kp_slider)
@@ -215,7 +226,7 @@ class MainWindow(QWidget):
         self.ki_slider = QSlider(Qt.Orientation.Horizontal)
         self.ki_slider.setMinimum(0)
         self.ki_slider.setMaximum(500)
-        self.ki_slider.setValue(int(self.controller.pid.ki * 100))
+        self.ki_slider.setValue(0)
         self.ki_slider.valueChanged.connect(self.update_ki)
         ki_block.addWidget(self.ki_label)
         ki_block.addWidget(self.ki_slider)
@@ -228,7 +239,7 @@ class MainWindow(QWidget):
         self.kd_slider = QSlider(Qt.Orientation.Horizontal)
         self.kd_slider.setMinimum(0)
         self.kd_slider.setMaximum(500)
-        self.kd_slider.setValue(int(self.controller.pid.kd * 100))
+        self.kd_slider.setValue(0)
         self.kd_slider.valueChanged.connect(self.update_kd)
         kd_block.addWidget(self.kd_label)
         kd_block.addWidget(self.kd_slider)
@@ -333,26 +344,111 @@ class MainWindow(QWidget):
 
         self.setLayout(main_layout)
 
+    def calculate_score(self, overshoot, settling_time):
+        """
+        Рассчитывает балльную оценку системы.
+        Максимальный балл: 10000
+
+        Критерии:
+        - Если система не стабилизировалась или перерегулирование >= 50%: 0 баллов
+        - Баллы складываются из двух компонентов:
+          1. Оценка перерегулирования (макс. 5000 баллов)
+          2. Оценка времени стабилизации (макс. 5000 баллов)
+        """
+        # Проверка на критические условия
+        if settling_time is None or overshoot >= 50:
+            return 0
+
+        # ===== 1. ОЦЕНКА ПЕРЕРЕГУЛИРОВАНИЯ (0-5000 баллов) =====
+        # Используем экспоненциальную функцию для плавного снижения баллов
+        # При 0% перерегулирования -> 5000 баллов
+        # При 50% перерегулирования -> 0 баллов
+        if overshoot <= 0:
+            overshoot_score = 5000
+        else:
+            # Экспоненциальное затухание: чем меньше перерегулирование, тем выше балл
+            # Коэффициент затухания подобран так, чтобы при 50% было близко к 0
+            decay_rate = 0.1
+            overshoot_score = 5000 * (2.71828 ** (-decay_rate * overshoot))
+            overshoot_score = max(0, min(5000, overshoot_score))
+
+        # ===== 2. ОЦЕНКА ВРЕМЕНИ СТАБИЛИЗАЦИИ (0-5000 баллов) =====
+        # При времени стабилизации 0 -> 5000 баллов
+        # При времени стабилизации 30с и более -> 0 баллов
+        if settling_time <= 0:
+            time_score = 5000
+        elif settling_time >= 30:
+            time_score = 0
+        else:
+            # Линейная интерполяция с усилением для быстрых результатов
+            # Используем квадратичную функцию для поощрения быстрой стабилизации
+            normalized_time = settling_time / 30.0  # 0 до 1
+            time_score = 5000 * (1 - normalized_time) ** 2
+            time_score = max(0, min(5000, time_score))
+
+        # ===== 3. ИТОГОВЫЙ СЧЕТ =====
+        total_score = overshoot_score + time_score
+
+        # Округляем до целого
+        return round(total_score)
+
+    def set_pid_values(self, kp, ki, kd):
+        """Устанавливает значения PID и обновляет слайдеры и метки"""
+        self.controller.pid.kp = kp
+        self.controller.pid.ki = ki
+        self.controller.pid.kd = kd
+
+        # Обновляем слайдеры (блокируем сигналы, чтобы избежать рекурсии)
+        self.kp_slider.blockSignals(True)
+        self.ki_slider.blockSignals(True)
+        self.kd_slider.blockSignals(True)
+
+        self.kp_slider.setValue(int(kp * 100))
+        self.ki_slider.setValue(int(ki * 100))
+        self.kd_slider.setValue(int(kd * 100))
+
+        self.kp_slider.blockSignals(False)
+        self.ki_slider.blockSignals(False)
+        self.kd_slider.blockSignals(False)
+
+        # Обновляем метки
+        self.kp_label.setText(f"Kp: {kp:.2f}")
+        self.ki_label.setText(f"Ki: {ki:.2f}")
+        self.kd_label.setText(f"Kd: {kd:.2f}")
+
     def set_mode(self, mode):
         self.controller.mode = mode
 
         if mode == "manual":
             self.controller.pid_enabled = False
-        else:
+            # Устанавливаем PID коэффициенты в 0
+            self.set_pid_values(0, 0, 0)
+        elif mode == "auto":
             self.controller.pid_enabled = True
+            # Возвращаем стандартные значения PID
+            self.set_pid_values(
+                self.default_pid['kp'],
+                self.default_pid['ki'],
+                self.default_pid['kd']
+            )
+        elif mode == "tuning":
+            self.controller.pid_enabled = True
+            # Всегда сбрасываем коэффициенты в 0 при входе в режим настройки
+            self.set_pid_values(0, 0, 0)
 
+        # Обновляем стили кнопок
         self.manual_btn.setStyleSheet("")
         self.auto_btn.setStyleSheet("")
         self.tuning_btn.setStyleSheet("")
 
         self.controls_frame.setStyleSheet("""
-                                    QFrame {
-                                        background-color: #16213e; 
-                                        border: 2px solid #0f3460; 
-                                        border-radius: 8px;
-                                        padding: 15px;
-                                    }
-                                """)
+            QFrame {
+                background-color: #16213e; 
+                border: 2px solid #0f3460; 
+                border-radius: 8px;
+                padding: 15px;
+            }
+        """)
 
         if mode == "manual":
             self.manual_btn.setStyleSheet("background-color: #00cc66;")
@@ -363,16 +459,17 @@ class MainWindow(QWidget):
         elif mode == "tuning":
             self.tuning_btn.setStyleSheet("background-color: #00cc66;")
             self.controls_frame.setStyleSheet("""
-                            QFrame {
-                                background-color: #16213e; 
-                                border: 2px solid #0f3460; 
-                                border-radius: 8px;
-                                padding: 5px;
-                                padding-left: 6px;
-                                padding-right: 6px;
-                            }
-                        """)
+                QFrame {
+                    background-color: #16213e; 
+                    border: 2px solid #0f3460; 
+                    border-radius: 8px;
+                    padding: 5px;
+                    padding-left: 6px;
+                    padding-right: 6px;
+                }
+            """)
             self.pid_frame.show()
+
 
     def show_help(self):
         msg = QMessageBox(self)
@@ -446,24 +543,17 @@ class MainWindow(QWidget):
 
         current_time = time.time() - self.controller.start_time
 
-        # Отслеживание изменения направления движения (экстремумов)
         if self.previous_error is not None:
-            # Вычисляем производную ошибки (скорость изменения)
             error_derivative = signed_error - self.previous_error
 
             if hasattr(self, 'prev_derivative') and self.prev_derivative is not None:
-                # Проверяем изменение знака производной
-                # Производная поменяла знак = точка экстремума
                 if (self.prev_derivative > 0 and error_derivative <= 0) or \
                         (self.prev_derivative < 0 and error_derivative >= 0):
 
-                    # Это точка экстремума (разворота)
                     if not self.has_crossed_target:
-                        # Первый экстремум - начинаем отслеживать
                         self.has_crossed_target = True
-                        self.max_overshoot = abs(level - target)  # Берем отклонение от уставки в точке экстремума
+                        self.max_overshoot = abs(level - target)
                     else:
-                        # Последующие экстремумы - обновляем если отклонение больше
                         current_overshoot = abs(level - target)
                         if current_overshoot > self.max_overshoot:
                             self.max_overshoot = current_overshoot
@@ -473,7 +563,6 @@ class MainWindow(QWidget):
         self.overshoot_label.setText(f"Перерегулирование: {self.max_overshoot:.1f}%")
         self.previous_error = signed_error
 
-        # Логика стабилизации
         failure_relative_time = None
         if self.failure_active and self.failure_start_sim_time is not None:
             failure_relative_time = current_time - self.failure_start_sim_time
@@ -488,6 +577,10 @@ class MainWindow(QWidget):
             if self.final_settling_time is not None:
                 self.best_settling = min(self.best_settling, self.final_settling_time)
 
+            if self.settled or remaining <= 0:
+                current_score = self.calculate_score(self.max_overshoot, self.final_settling_time)
+                self.best_score = max(self.best_score, current_score)
+
             if remaining <= 0:
                 self.failure_active = False
                 self.failure_button.setText("Авария системы")
@@ -495,12 +588,11 @@ class MainWindow(QWidget):
 
         # Отслеживание времени стабилизации
         if not self.settled:
-            if error < 3:  # В пределах 3% от уставки
+            if error < 3:
                 if self.settling_time is None:
                     self.settling_time = failure_relative_time if self.failure_active else current_time
                 else:
                     check_time = failure_relative_time if self.failure_active else current_time
-                    # Должно пройти 3 секунды в стабильном состоянии
                     if check_time - self.settling_time > 3:
                         self.settled = True
                         if self.failure_active and self.failure_start_sim_time is not None:
@@ -508,26 +600,21 @@ class MainWindow(QWidget):
                         else:
                             self.final_settling_time = current_time - self.unstable_since
             else:
-                # Ошибка снова большая - сбрасываем таймер стабилизации
                 self.settling_time = None
         else:
-            # Было стабильно, но теперь опять нестабильно
             if error > 5:
                 self.settling_time = None
                 self.settled = False
                 self.unstable_since = failure_relative_time if self.failure_active else current_time
-                # Сбрасываем для отслеживания нового перерегулирования
                 self.has_crossed_target = False
                 self.prev_derivative = None
                 self.max_overshoot = 0
 
-        # Отображение времени стабилизации
         if self.settled:
             self.settling_label.setText(f"Время стабилизации: {self.final_settling_time:.1f} c")
         else:
             self.settling_label.setText("Время стабилизации: ...")
 
-        # Оценка качества на основе перерегулирования
         if self.has_crossed_target:
             if self.max_overshoot < 5:
                 quality = "Отличное"
@@ -547,11 +634,9 @@ class MainWindow(QWidget):
 
         self.quality_label.setText(f"Оценка: {quality}")
 
-        # Обновление отображения потока
         outflow_percent = self.controller.model.outflow * 10
         self.outflow_label.setText(f"Отдача: {outflow_percent:.1f}%")
 
-        # Обновление графика
         self.controller.time_data.append(current_time)
         self.controller.level_data.append(level)
 
@@ -564,7 +649,6 @@ class MainWindow(QWidget):
             list(self.controller.level_data)
         )
 
-        # Цветовая индикация оттока
         if outflow_percent > 75:
             self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff4444; padding: 5px;")
         elif outflow_percent > 50:
@@ -573,41 +657,32 @@ class MainWindow(QWidget):
             self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #00cc66; padding: 5px;")
 
     def show_failure_results(self):
-
         msg = QMessageBox(self)
-
         msg.setWindowTitle("Результаты восстановления")
 
-        score = 0
-
-        if self.best_overshoot < 10:
-            score += 1
-        elif self.best_overshoot < 15:
-            score += 0.8
-        elif self.best_overshoot < 20:
-            score += 0.6
-
-        if self.best_settling < 10:
-            score += 1
-        if self.best_settling < 20:
-            score += 0.5
-
-        if score == 2:
-            rating = "Отличное восстановление"
-        elif score > 1.7:
-            rating = "Хорошее восстановление"
-        elif score > 1.2:
-            rating = "Система удовлетворительна"
-        elif score > 1:
-            rating = "Система нестабильна"
-        else:
-            rating = "Критическая ошибка регулирования"
         best_settling_text = f"{self.best_settling:.2f} с" if self.best_settling <= 35 else "Не стабилизировано"
+
+        final_score = self.calculate_score(self.best_overshoot, self.best_settling)
+
+        if final_score >= 9000:
+            score_rating = "S - Превосходно!"
+        elif final_score >= 7500:
+            score_rating = "A - Отлично"
+        elif final_score >= 6000:
+            score_rating = "B - Хорошо"
+        elif final_score >= 4000:
+            score_rating = "C - Удовлетворительно"
+        elif final_score >= 2000:
+            score_rating = "D - Плохо"
+        else:
+            score_rating = "F - Критически плохо"
+
         msg.setText(
             f"Результаты аварийного режима:\n\n"
             f"Макс. перерегулирование: {self.max_overshoot:.2f}%\n"
-            f"Время стабилизации: {best_settling_text}\n\n"
-            f"Оценка: {rating}"
+            f"Время стабилизации: {best_settling_text}\n"
+            f"Итоговые баллы: {final_score} / 10000\n"
+            f"Рейтинг: {score_rating}\n\n"
         )
 
         msg.exec()
@@ -649,6 +724,7 @@ class MainWindow(QWidget):
         self.best_error = 999999
         self.best_overshoot = 999999
         self.best_settling = 999999
+        self.best_score = 0  # Сбрасываем лучший счет при новой аварии
 
 
 class TankWidget(QWidget):
@@ -673,7 +749,7 @@ class TankWidget(QWidget):
         x = (width - tank_width) // 2
         y = 60
 
-        level  = self.controller.model.level
+        level = self.controller.model.level
         level_percent = self.controller.model.level / 100.0
 
         # ВНЕШНИЙ ЦИЛИНДР

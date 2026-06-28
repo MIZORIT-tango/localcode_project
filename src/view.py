@@ -81,6 +81,8 @@ class MainWindow(QWidget):
         self.timer.timeout.connect(self.update_simulation)
         self.timer.start(30)
 
+        self.failure_start_sim_time = None
+
     # -------- UI LAYOUT --------
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -438,12 +440,9 @@ class MainWindow(QWidget):
         self.tank_widget.update()
 
         target = self.controller.model.setpoint
-
         signed_error = target - level
         error = abs(signed_error)
-        self.error_label.setText(
-            f"Ошибка: {error:.1f}%"
-        )
+        self.error_label.setText(f"Ошибка: {error:.1f}%")
 
         if self.previous_error is not None:
             if (self.previous_error > 0 > signed_error) or (self.previous_error < 0 < signed_error):
@@ -454,18 +453,19 @@ class MainWindow(QWidget):
             if overshoot > self.max_overshoot:
                 self.max_overshoot = overshoot
 
-        self.overshoot_label.setText(
-            f"Перерегулирование: {self.max_overshoot:.1f}%"
-        )
+        self.overshoot_label.setText(f"Перерегулирование: {self.max_overshoot:.1f}%")
         self.previous_error = signed_error
 
         current_time = time.time() - self.controller.start_time
+
+        failure_relative_time = None
+        if self.failure_active and self.failure_start_sim_time is not None:
+            failure_relative_time = current_time - self.failure_start_sim_time
+
         if self.failure_active:
             elapsed = time.time() - self.failure_start_time
             remaining = max(0, self.failure_duration - elapsed)
-            self.failure_button.setText(
-                f"Авария: {remaining:.0f} c"
-            )
+            self.failure_button.setText(f"Авария: {remaining:.0f} c")
 
             self.best_overshoot = self.max_overshoot
 
@@ -476,34 +476,37 @@ class MainWindow(QWidget):
             if remaining <= 0:
                 self.failure_active = False
                 self.failure_button.setText("Авария системы")
-
                 self.show_failure_results()
 
         if not self.settled:
-            if error < 5:
+            if error < 3:
                 if self.settling_time is None:
-                    self.settling_time = current_time
-                elif current_time - self.settling_time > 3:
-                    self.settled = True
-                    self.final_settling_time = current_time - self.unstable_since
+                    # Сохраняем время относительно начала аварии
+                    self.settling_time = failure_relative_time if self.failure_active else current_time
+                else:
+                    # Проверяем, прошло ли 3 секунды с момента начала стабилизации
+                    check_time = failure_relative_time if self.failure_active else current_time
+                    if check_time - self.settling_time > 3:
+                        self.settled = True
+                        # Время стабилизации = время когда стабилизировалось - время когда стало нестабильным
+                        if self.failure_active and self.failure_start_sim_time is not None:
+                            self.final_settling_time = check_time - self.unstable_since
+                        else:
+                            self.final_settling_time = current_time - self.unstable_since
             else:
                 self.settling_time = None
         else:
             if error > 5:
                 self.settling_time = None
                 self.settled = False
-                self.unstable_since = current_time
+                self.unstable_since = failure_relative_time if self.failure_active else current_time
                 self.max_overshoot = 0
                 self.has_crossed_target = False
 
         if self.settled:
-            self.settling_label.setText(
-                f"Время стабилизации: {self.final_settling_time:.1f} c"
-            )
+            self.settling_label.setText(f"Время стабилизации: {self.final_settling_time:.1f} c")
         else:
-            self.settling_label.setText(
-                "Время стабилизации: ..."
-            )
+            self.settling_label.setText("Время стабилизации: ...")
 
         if self.max_overshoot < 5 and error < 3:
             quality = "Отличное"
@@ -597,6 +600,9 @@ class MainWindow(QWidget):
     def trigger_failure(self):
         self.failure_active = True
         self.failure_start_time = time.time()
+
+        self.failure_start_sim_time = time.time() - self.controller.start_time
+
         self.controller.model.level = random.choice((0, 100))
 
         self.max_overshoot = 0

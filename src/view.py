@@ -444,20 +444,36 @@ class MainWindow(QWidget):
         error = abs(signed_error)
         self.error_label.setText(f"Ошибка: {error:.1f}%")
 
-        if self.previous_error is not None:
-            if (self.previous_error > 0 > signed_error) or (self.previous_error < 0 < signed_error):
-                self.has_crossed_target = True
+        current_time = time.time() - self.controller.start_time
 
-        if self.has_crossed_target:
-            overshoot = abs(level - target)
-            if overshoot > self.max_overshoot:
-                self.max_overshoot = overshoot
+        # Отслеживание изменения направления движения (экстремумов)
+        if self.previous_error is not None:
+            # Вычисляем производную ошибки (скорость изменения)
+            error_derivative = signed_error - self.previous_error
+
+            if hasattr(self, 'prev_derivative') and self.prev_derivative is not None:
+                # Проверяем изменение знака производной
+                # Производная поменяла знак = точка экстремума
+                if (self.prev_derivative > 0 and error_derivative <= 0) or \
+                        (self.prev_derivative < 0 and error_derivative >= 0):
+
+                    # Это точка экстремума (разворота)
+                    if not self.has_crossed_target:
+                        # Первый экстремум - начинаем отслеживать
+                        self.has_crossed_target = True
+                        self.max_overshoot = abs(level - target)  # Берем отклонение от уставки в точке экстремума
+                    else:
+                        # Последующие экстремумы - обновляем если отклонение больше
+                        current_overshoot = abs(level - target)
+                        if current_overshoot > self.max_overshoot:
+                            self.max_overshoot = current_overshoot
+
+            self.prev_derivative = error_derivative
 
         self.overshoot_label.setText(f"Перерегулирование: {self.max_overshoot:.1f}%")
         self.previous_error = signed_error
 
-        current_time = time.time() - self.controller.start_time
-
+        # Логика стабилизации
         failure_relative_time = None
         if self.failure_active and self.failure_start_sim_time is not None:
             failure_relative_time = current_time - self.failure_start_sim_time
@@ -467,63 +483,75 @@ class MainWindow(QWidget):
             remaining = max(0, self.failure_duration - elapsed)
             self.failure_button.setText(f"Авария: {remaining:.0f} c")
 
-            self.best_overshoot = self.max_overshoot
+            self.best_overshoot = min(self.best_overshoot, self.max_overshoot)
 
             if self.final_settling_time is not None:
-                if self.final_settling_time < self.best_settling:
-                    self.best_settling = self.final_settling_time
+                self.best_settling = min(self.best_settling, self.final_settling_time)
 
             if remaining <= 0:
                 self.failure_active = False
                 self.failure_button.setText("Авария системы")
                 self.show_failure_results()
 
+        # Отслеживание времени стабилизации
         if not self.settled:
-            if error < 3:
+            if error < 3:  # В пределах 3% от уставки
                 if self.settling_time is None:
-                    # Сохраняем время относительно начала аварии
                     self.settling_time = failure_relative_time if self.failure_active else current_time
                 else:
-                    # Проверяем, прошло ли 3 секунды с момента начала стабилизации
                     check_time = failure_relative_time if self.failure_active else current_time
+                    # Должно пройти 3 секунды в стабильном состоянии
                     if check_time - self.settling_time > 3:
                         self.settled = True
-                        # Время стабилизации = время когда стабилизировалось - время когда стало нестабильным
                         if self.failure_active and self.failure_start_sim_time is not None:
                             self.final_settling_time = check_time - self.unstable_since
                         else:
                             self.final_settling_time = current_time - self.unstable_since
             else:
+                # Ошибка снова большая - сбрасываем таймер стабилизации
                 self.settling_time = None
         else:
+            # Было стабильно, но теперь опять нестабильно
             if error > 5:
                 self.settling_time = None
                 self.settled = False
                 self.unstable_since = failure_relative_time if self.failure_active else current_time
-                self.max_overshoot = 0
+                # Сбрасываем для отслеживания нового перерегулирования
                 self.has_crossed_target = False
+                self.prev_derivative = None
+                self.max_overshoot = 0
 
+        # Отображение времени стабилизации
         if self.settled:
             self.settling_label.setText(f"Время стабилизации: {self.final_settling_time:.1f} c")
         else:
             self.settling_label.setText("Время стабилизации: ...")
 
-        if self.max_overshoot < 5 and error < 3:
-            quality = "Отличное"
-        elif self.max_overshoot < 10 and error < 5:
-            quality = "Хорошее"
-        elif self.max_overshoot < 15 and error < 7:
-            quality = "Удовлетворительно"
+        # Оценка качества на основе перерегулирования
+        if self.has_crossed_target:
+            if self.max_overshoot < 5:
+                quality = "Отличное"
+            elif self.max_overshoot < 10:
+                quality = "Хорошее"
+            elif self.max_overshoot < 15:
+                quality = "Удовлетворительно"
+            elif self.max_overshoot < 25:
+                quality = "Посредственное"
+            else:
+                quality = "Нестабильное"
         else:
-            quality = "Нестабильное"
-        self.quality_label.setText(
-            f"Оценка: {quality}"
-        )
+            if error < 3:
+                quality = "Отличное (без колебаний)"
+            else:
+                quality = "В процессе..."
 
+        self.quality_label.setText(f"Оценка: {quality}")
+
+        # Обновление отображения потока
         outflow_percent = self.controller.model.outflow * 10
         self.outflow_label.setText(f"Отдача: {outflow_percent:.1f}%")
 
-        current_time = time.time() - self.controller.start_time
+        # Обновление графика
         self.controller.time_data.append(current_time)
         self.controller.level_data.append(level)
 
@@ -535,6 +563,8 @@ class MainWindow(QWidget):
             list(self.controller.time_data),
             list(self.controller.level_data)
         )
+
+        # Цветовая индикация оттока
         if outflow_percent > 75:
             self.outflow_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #ff4444; padding: 5px;")
         elif outflow_percent > 50:
@@ -572,11 +602,11 @@ class MainWindow(QWidget):
             rating = "Система нестабильна"
         else:
             rating = "Критическая ошибка регулирования"
-
+        best_settling_text = f"{self.best_settling:.2f} с" if self.best_settling <= 35 else "Не стабилизировано"
         msg.setText(
             f"Результаты аварийного режима:\n\n"
-            f"Макс. перерегулирование: {self.best_overshoot:.2f}%\n"
-            f"Время стабилизации: {self.best_settling:.2f} c\n\n"
+            f"Макс. перерегулирование: {self.max_overshoot:.2f}%\n"
+            f"Время стабилизации: {best_settling_text}\n\n"
             f"Оценка: {rating}"
         )
 
@@ -608,6 +638,7 @@ class MainWindow(QWidget):
         self.max_overshoot = 0
         self.previous_error = None
         self.has_crossed_target = False
+        self.prev_derivative = None  # Предыдущее значение производной
 
         self.settled = False
         self.settling_time = None

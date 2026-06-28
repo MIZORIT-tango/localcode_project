@@ -1,4 +1,10 @@
 import sys
+import os
+
+if getattr(sys, 'frozen', False):
+    os.environ['QT_PLUGIN_PATH'] = os.path.join(sys._MEIPASS, 'PyQt6', 'Qt6', 'plugins')
+    os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = os.path.join(sys._MEIPASS, 'PyQt6', 'Qt6', 'plugins', 'platforms')
+
 from PyQt6.QtWidgets import QApplication
 
 from src.view import MainWindow
